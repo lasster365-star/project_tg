@@ -1,0 +1,9 @@
+# Telegram-бот-магазин: aiohttp/FastAPI (один процесс — выбран FastAPI) + aiogram 3
+aiogram>=3.13,<4
+SQLAlchemy>=2.0,<3
+aiosqlite>=0.20
+psycopg[binary]>=3.2 ; platform_system != "Windows"
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+python-multipart>=0.0.12

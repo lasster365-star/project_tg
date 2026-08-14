@@ -1,0 +1,11 @@
+{
+  "name": "TG Shop",
+  "short_name": "TG Shop",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b0f17",
+  "theme_color": "#7c3aed",
+  "icons": [
+    { "src": "assets/logo.png", "sizes": "192x192", "type": "image/png" }
+  ]
+}
