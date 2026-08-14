@@ -62,14 +62,6 @@ async def health_public() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@public.get("/categories")
-async def public_categories(
-    service: Annotated[ShopService, Depends(_service)],
-) -> dict:
-    cats = await service.list_categories()
-    return {"categories": [category_dto(c) for c in cats]}
-
-
 @public.get("/products")
 async def public_products(
     service: Annotated[ShopService, Depends(_service)],
@@ -86,7 +78,35 @@ async def public_products(
     return {"products": [product_dto(p) for p in products]}
 
 
-# ---------------- Authorized (нужен initData) ----------------
+@public.get("/product/{product_id}")
+async def public_product(
+    product_id: int,
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    p = await service.get_product(product_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    return {"product": product_dto(p)}
+
+
+@router.get("/product/{product_id}")
+async def auth_product(
+    product_id: int,
+    user: Annotated[User, Depends(require_db_user)],  # noqa: ARG001
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    p = await service.get_product(product_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="product not found")
+    return {"product": product_dto(p)}
+
+
+@public.get("/categories")
+async def public_categories(
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    cats = await service.list_categories()
+    return {"categories": [category_dto(c) for c in cats]}
 
 @router.get("/health")
 async def health() -> dict[str, str]:

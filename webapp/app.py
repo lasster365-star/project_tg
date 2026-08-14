@@ -8,6 +8,7 @@ import asyncio
 import logging
 import signal
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -37,19 +38,29 @@ log = logging.getLogger("webapp")
 TWA_DIR = PROJECT_ROOT / "twa"
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Инициализация БД на старте, освобождение ресурсов на остановке."""
+    log.info("Starting up: DB init…")
+    await init_db()
+    log.info("DB initialized")
+    try:
+        yield
+    finally:
+        # Никаких особых ресурсов освобождать не нужно — соединения SQLAlchemy
+        # закроются вместе с event loop. Здесь — только лог.
+        log.info("Shutting down.")
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Telegram Shop Mini App",
-        version="1.1.0",
+        version="1.2.0",
         docs_url="/api/docs",
         redoc_url=None,
         openapi_url="/api/openapi.json",
+        lifespan=_lifespan,
     )
-
-    @app.on_event("startup")
-    async def _startup() -> None:
-        await init_db()
-        log.info("DB initialized")
 
     @app.exception_handler(Exception)
     async def _json_error(request: Request, exc: Exception):
@@ -82,7 +93,6 @@ def create_app() -> FastAPI:
     async def admin_page() -> FileResponse:
         return FileResponse(TWA_DIR / "admin.html")
 
-    # Mini App статика — корень /, StaticFiles ниже не пересекается
     app.mount("/", StaticFiles(directory=str(TWA_DIR), html=True), name="twa")
 
     return app

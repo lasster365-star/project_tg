@@ -494,15 +494,16 @@
       void origMe; void origCart;
 
       // Подменяем API URL категорий/товаров на публичный.
-      proxy.categories = async () => (await fetch("/api/public/categories")).json();
-      proxy.products = async (cid, kind) => {
-        const q = new URLSearchParams();
-        if (cid != null) q.set("categoryId", String(cid));
-        if (kind) q.set("kind", kind);
-        const u = "/api/public/products" + (q.toString() ? "?" + q.toString() : "");
-        return (await fetch(u)).json();
-      };
-      return;
+          proxy.categories = async () => (await fetch("/api/public/categories")).json();
+          proxy.products = async (cid, kind) => {
+            const q = new URLSearchParams();
+            if (cid != null) q.set("categoryId", String(cid));
+            if (kind) q.set("kind", kind);
+            const u = "/api/public/products" + (q.toString() ? "?" + q.toString() : "");
+            return (await fetch(u)).json();
+          };
+          proxy.product = async (id) => (await fetch(`/api/public/product/${id}`)).json();
+          return;
     }
     setTab("shop");
     handleDeepLink();
