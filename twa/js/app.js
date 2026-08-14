@@ -5,13 +5,15 @@
     try { tg.ready(); tg.expand(); } catch (_) {}
   }
 
-  /** Простое состояние UI. */
   const state = {
     tab: "shop",
     categoryId: null,
     categoryTitle: "Все категории",
     product: null,
     deepLink: null,
+    guestMode: false,        // initData есть, но без поля user
+    noInitData: false,       // initData отсутствует вовсе
+    initInfo: null,
   };
 
   function $(sel) { return document.querySelector(sel); }
@@ -49,16 +51,61 @@
   async function onError(err) {
     console.error(err);
     if (err.status === 401) {
-      renderText("Сессия истекла. Перезапустите мини-приложение через бота.");
-      return;
+      // тихо обработаем — гость может смотреть витрину
+      return null;
     }
     toast(err.message || "Ошибка");
+    return null;
   }
 
   function renderText(text) {
     const screen = $("#screen");
     screen.innerHTML = "";
     screen.appendChild(el("div", { class: "empty", text }));
+  }
+
+  // ---------- Диагностика ----------
+  async function probeInitData() {
+    const raw = window.shopApi.initData();
+    state.noInitData = !raw;
+    if (!raw) {
+      state.initInfo = { raw_present: false };
+      return state.initInfo;
+    }
+    try {
+      const r = await fetch("/api/debug/initdata", {
+        headers: { Authorization: "tma " + raw },
+      });
+      const data = await r.json();
+      state.initInfo = data;
+      state.guestMode = !!(
+        data.validation_ok &&
+        (!data.user || !data.user.id)
+      );
+      return data;
+    } catch (err) {
+      console.warn("probeInitData failed", err);
+      return null;
+    }
+  }
+
+  function renderInitBanner() {
+    // На главном экране: тонкая плашка с диагностикой.
+    const screen = $("#screen");
+    let banner = document.getElementById("initBanner");
+    if (!state.initInfo || !state.noInitData && !state.guestMode) {
+      if (banner) banner.remove();
+      return;
+    }
+    const html = state.noInitData
+      ? '<div class="banner warn">⚠️ Telegram не передал данные. Открой бота → нажми <b>🛍 Открыть магазин</b>.</div>'
+      : '<div class="banner warn">⚠️ Mini App запущен в режиме inline — Telegram не передал <code>user</code>. Открой через reply-кнопку <b>🛍 Открыть магазин</b>.</div>';
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "initBanner";
+      screen.insertBefore(banner, screen.firstChild);
+    }
+    banner.innerHTML = html;
   }
 
   // ---------- Экраны ----------
@@ -85,18 +132,37 @@
     const screen = $("#screen");
     screen.innerHTML = "";
     screen.appendChild(el("div", { class: "empty", text: "Загрузка…" }));
+    renderInitBanner();
     try {
       const [catsRes, prodsRes] = await Promise.all([
         window.shopApi.categories(),
         window.shopApi.products(),
       ]);
       screen.innerHTML = "";
+      renderInitBanner();
       screen.appendChild(el("div", { class: "section-title", text: "Категории" }));
       screen.appendChild(renderCategoryTabs(catsRes.categories, null));
       screen.appendChild(el("div", { class: "section-title", text: "Каталог" }));
       screen.appendChild(renderProductGrid(prodsRes.products));
     } catch (err) {
-      onError(err);
+      await onError(err);
+      // Не падаем в пустой экран: покажем хотя бы витрину.
+      try {
+        const catsRes = await fetch("/api/public/categories").then(r => r.json());
+        const prodsRes = await fetch("/api/public/products").then(r => r.json());
+        screen.innerHTML = "";
+        renderInitBanner();
+        screen.appendChild(el("div", { class: "section-title", text: "Категории" }));
+        screen.appendChild(renderCategoryTabs(catsRes.categories, null));
+        screen.appendChild(el("div", { class: "section-title", text: "Каталог" }));
+        if (!prodsRes.products.length) {
+          screen.appendChild(el("div", { class: "empty", text: "Каталог пуст" }));
+        } else {
+          screen.appendChild(renderProductGrid(prodsRes.products));
+        }
+      } catch (e2) {
+        renderText("Не удалось загрузить каталог. Попробуйте позже.");
+      }
     }
   }
 
@@ -116,6 +182,7 @@
       back.style.cursor = "pointer";
       back.onclick = () => setTab("shop");
       screen.appendChild(back);
+      renderInitBanner();
       screen.appendChild(renderCategoryTabs(catsRes.categories, categoryId));
       screen.appendChild(el("div", { class: "section-title", text: "Товары" }));
       if (!prodsRes.products.length) {
@@ -124,7 +191,7 @@
         screen.appendChild(renderProductGrid(prodsRes.products));
       }
     } catch (err) {
-      onError(err);
+      await onError(err);
     }
   }
 
@@ -178,6 +245,7 @@
       back.onclick = () => setTab("shop");
       screen.innerHTML = "";
       screen.appendChild(back);
+      renderInitBanner();
       const card = el("div", { class: "card" });
       const cover = el("div", {
         class: "cover " + (p.kind || "kind-unknown"),
@@ -197,7 +265,28 @@
           ? ("Срок проката: " + p.rentalDays + " дней")
           : ("В наличии: " + (p.stock < 0 ? "∞" : p.stock)),
       }));
-      card.appendChild(body);
+      card.appendChild(card.children[0]);
+
+      const card2 = el("div", { class: "card" });
+      const cover2 = el("div", {
+        class: "cover " + (p.kind || "kind-unknown"),
+        text: coverLetters(p.title, p.kind),
+      });
+      card2.appendChild(cover2);
+      const body2 = el("div", { class: "body" });
+      body2.appendChild(el("div", { class: "title", text: p.title }));
+      body2.appendChild(el("div", { class: "price", text: fmtPrice(p.price) + " ₽" }));
+      body2.appendChild(el("div", {
+        class: "meta",
+        text: "⭐ " + p.rating.toFixed(2) + " · " + p.reviewsCount + " отзывов",
+      }));
+      body2.appendChild(el("div", {
+        class: "meta",
+        text: p.rentalDays
+          ? ("Срок проката: " + p.rentalDays + " дней")
+          : ("В наличии: " + (p.stock < 0 ? "∞" : p.stock)),
+      }));
+      card2.appendChild(body2);
 
       const addBtn = el("button", {
         class: "btn",
@@ -206,7 +295,7 @@
           try {
             const r = await window.shopApi.cartAdd(p.id, 1);
             toast("Добавлено. В корзине: " + r.quantity);
-          } catch (err) { onError(err); }
+          } catch (err) { await onError(err); toast("Открой бота заново"); }
         },
       });
       const backBtn = el("button", {
@@ -214,12 +303,12 @@
         text: "Назад",
         onclick: () => setTab("shop"),
       });
-      screen.appendChild(card);
+      screen.appendChild(card2);
       screen.appendChild(el("div", { class: "section-title", text: "Описание" }));
       screen.appendChild(el("div", { class: "meta", text: p.description, style: "padding:0 4px; color:var(--fg); font-size:14px; line-height:1.5;" }));
       screen.appendChild(el("div", { style: "margin-top:14px; display:flex; flex-direction:column; gap:8px;" }, [addBtn, backBtn]));
     } catch (err) {
-      onError(err);
+      await onError(err);
     }
   }
 
@@ -227,9 +316,11 @@
     const screen = $("#screen");
     screen.innerHTML = "";
     screen.appendChild(el("div", { class: "empty", text: "Загрузка…" }));
+    renderInitBanner();
     try {
       const res = await window.shopApi.cart();
       screen.innerHTML = "";
+      renderInitBanner();
       screen.appendChild(el("div", { class: "section-title", text: "Корзина" }));
       if (!res.lines.length) {
         screen.appendChild(el("div", { class: "empty", text: "Корзина пуста" }));
@@ -248,16 +339,6 @@
         "Итого: ", el("b", { text: fmtPrice(res.total) + " ₽" })
       ]));
       screen.appendChild(totals);
-      const openBot = tg
-        ? el("button", {
-            class: "btn ghost",
-            text: "💬 Открыть в боте для оплаты",
-            onclick: () => {
-              const bot = (tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.username) || "";
-              tg.openTelegramLink("https://t.me/" + (window.__BOT_USERNAME__ || "your_bot") + "?startapp=cart");
-            },
-          })
-        : null;
       screen.appendChild(el("button", {
         class: "btn",
         text: "💳 Оплатить через бот",
@@ -265,7 +346,6 @@
           try {
             const r = await window.shopApi.checkout();
             const id = r.order.id;
-            // Перенаправляем в бот: пользователь увидит тот же заказ
             if (tg) {
               const url = "https://t.me/" + (window.__BOT_USERNAME__ || "your_bot") + "?startapp=pay_" + id;
               tg.openTelegramLink(url);
@@ -273,7 +353,7 @@
             } else {
               toast("Откройте приложение в Telegram для оплаты");
             }
-          } catch (err) { onError(err); }
+          } catch (err) { await onError(err); toast("Открой бота заново"); }
         },
       }));
       screen.appendChild(el("button", {
@@ -281,7 +361,7 @@
         text: "Очистить корзину",
         onclick: async () => {
           try { await window.shopApi.cartClear(); toast("Очищено"); loadCart(); }
-          catch (err) { onError(err); }
+          catch (err) { await onError(err); }
         },
       }));
       screen.appendChild(el("button", {
@@ -289,29 +369,27 @@
         text: "⬅️ В магазин",
         onclick: () => setTab("shop"),
       }));
-      if (openBot) screen.appendChild(openBot);
-    } catch (err) { onError(err); }
+    } catch (err) { await onError(err); }
   }
 
   function cartRow(line) {
     const row = el("div", { class: "cart-row" });
     row.appendChild(el("div", { class: "name", text: line.product.title }));
-    const qty = el("div", { class: "qty", text: "× " + line.quantity + " · " + fmtPrice(line.subtotal) + " ₽" });
-    row.appendChild(qty);
-    const inc = el("button", { class: "rm", text: "+", onclick: async (e) => {
-      e.stopPropagation();
-      try { await window.shopApi.cartQty(line.product.id, line.quantity + 1); loadCart(); }
-      catch (err) { onError(err); }
-    } });
+    row.appendChild(el("div", { class: "qty", text: "× " + line.quantity + " · " + fmtPrice(line.subtotal) + " ₽" }));
     const dec = el("button", { class: "rm", text: "−", onclick: async (e) => {
       e.stopPropagation();
       try { await window.shopApi.cartQty(line.product.id, line.quantity - 1); loadCart(); }
-      catch (err) { onError(err); }
+      catch (err) { await onError(err); }
+    } });
+    const inc = el("button", { class: "rm", text: "+", onclick: async (e) => {
+      e.stopPropagation();
+      try { await window.shopApi.cartQty(line.product.id, line.quantity + 1); loadCart(); }
+      catch (err) { await onError(err); }
     } });
     const rm = el("button", { class: "rm", text: "🗑", onclick: async (e) => {
       e.stopPropagation();
       try { await window.shopApi.cartRemove(line.product.id); loadCart(); }
-      catch (err) { onError(err); }
+      catch (err) { await onError(err); }
     } });
     row.appendChild(dec);
     row.appendChild(inc);
@@ -323,12 +401,12 @@
     const screen = $("#screen");
     screen.innerHTML = "";
     screen.appendChild(el("div", { class: "empty", text: "Загрузка…" }));
+    renderInitBanner();
     try {
       const meRes = await window.shopApi.me();
-      const topupsRes = await window.shopApi.topups();
-      const ordersRes = await window.shopApi.orders();
       const u = meRes.user;
       screen.innerHTML = "";
+      renderInitBanner();
       const card = el("div", { class: "profile-card" });
       card.appendChild(profileRow("Имя", u.fullName));
       card.appendChild(profileRow("Username", u.username ? ("@" + u.username) : "—"));
@@ -349,7 +427,7 @@
               const r = await window.shopApi.topup(a);
               toast("Баланс: " + fmtPrice(r.user.balance) + " ₽");
               loadProfile();
-            } catch (err) { onError(err); }
+            } catch (err) { await onError(err); }
           },
         }));
       }
@@ -357,32 +435,42 @@
       screen.appendChild(row);
 
       screen.appendChild(el("div", { class: "section-title", text: "История покупок" }));
-      if (!ordersRes.orders.length) {
-        screen.appendChild(el("div", { class: "empty", text: "Пока пусто" }));
-      } else {
-        for (const o of ordersRes.orders) {
-          const item = el("div", { class: "profile-card" });
-          item.appendChild(profileRow("Заказ", "#" + o.id + " · " + o.status));
-          const subtotal = o.items.reduce((acc, i) => acc + Number(i.subtotal), 0);
-          item.appendChild(profileRow("Сумма", fmtPrice(subtotal) + " ₽"));
-          item.appendChild(profileRow("Товаров", String(o.items.length)));
-          screen.appendChild(item);
+      try {
+        const ordersRes = await window.shopApi.orders();
+        if (!ordersRes.orders.length) {
+          screen.appendChild(el("div", { class: "empty", text: "Пока пусто" }));
+        } else {
+          for (const o of ordersRes.orders) {
+            const item = el("div", { class: "profile-card" });
+            item.appendChild(profileRow("Заказ", "#" + o.id + " · " + o.status));
+            const subtotal = o.items.reduce((acc, i) => acc + Number(i.subtotal), 0);
+            item.appendChild(profileRow("Сумма", fmtPrice(subtotal) + " ₽"));
+            item.appendChild(profileRow("Товаров", String(o.items.length)));
+            screen.appendChild(item);
+          }
         }
+      } catch (e) {
+        screen.appendChild(el("div", { class: "empty", text: "История недоступна" }));
       }
 
       screen.appendChild(el("div", { class: "section-title", text: "Пополнения" }));
-      if (!topupsRes.topups.length) {
-        screen.appendChild(el("div", { class: "empty", text: "Нет пополнений" }));
-      } else {
-        for (const t of topupsRes.topups) {
-          const item = el("div", { class: "profile-card" });
-          item.appendChild(profileRow("Сумма", "+" + fmtPrice(t.amount) + " ₽"));
-          item.appendChild(profileRow("Метод", t.method));
-          item.appendChild(profileRow("Когда", new Date(t.createdAt).toLocaleString()));
-          screen.appendChild(item);
+      try {
+        const topupsRes = await window.shopApi.topups();
+        if (!topupsRes.topups.length) {
+          screen.appendChild(el("div", { class: "empty", text: "Нет пополнений" }));
+        } else {
+          for (const t of topupsRes.topups) {
+            const item = el("div", { class: "profile-card" });
+            item.appendChild(profileRow("Сумма", "+" + fmtPrice(t.amount) + " ₽"));
+            item.appendChild(profileRow("Метод", t.method));
+            item.appendChild(profileRow("Когда", new Date(t.createdAt).toLocaleString()));
+            screen.appendChild(item);
+          }
         }
+      } catch (e) {
+        screen.appendChild(el("div", { class: "empty", text: "История недоступна" }));
       }
-    } catch (err) { onError(err); }
+    } catch (err) { await onError(err); }
   }
 
   function profileRow(label, value) {
@@ -395,11 +483,9 @@
   async function loadSupport() {
     const screen = $("#screen");
     screen.innerHTML = "";
+    renderInitBanner();
     screen.appendChild(el("div", { class: "section-title", text: "Поддержка" }));
     const card = el("div", { class: "profile-card" });
-    card.appendChild(el("div", { class: "row" }, [
-      el("span", { text: "Связаться" }),
-    ]));
     const note = el("div", {
       class: "meta",
       text: "Среднее время ответа — 15 минут в рабочее время.",
@@ -416,7 +502,6 @@
     }));
   }
 
-  // ---------- Роутер вкладок ----------
   function setTab(name) {
     state.tab = name;
     document.querySelectorAll(".bottombar button").forEach(b => {
@@ -431,7 +516,6 @@
     if (name === "support") { title.textContent = "Поддержка"; loadSupport(); }
   }
 
-  // ---------- Старт ----------
   function bind() {
     document.querySelectorAll(".bottombar button").forEach(b => {
       b.addEventListener("click", () => setTab(b.dataset.tab));
@@ -443,7 +527,6 @@
   }
 
   function handleDeepLink() {
-    // tg.initDataUnsafe.start_param может прийти, например "cart" или "pay_<id>"
     const unsafe = tg && tg.initDataUnsafe ? tg.initDataUnsafe : null;
     const param = unsafe && unsafe.start_param ? unsafe.start_param : null;
     if (!param) return;
@@ -459,52 +542,71 @@
     }
   }
 
-  // Стартовая загрузка
-    bind();
-    // Если initData пустое (например браузер) — покажем дружелюбное сообщение
-    // вместо «сессия истекла».
-    if (!tg || !window.shopApi.initData()) {
-      const screen = $("#screen");
-      screen.innerHTML = "";
-      const note = document.createElement("div");
-      note.className = "empty";
-      note.innerHTML =
-        '<div style="font-size:48px; margin-bottom:12px;">🛍</div>' +
-        '<div style="font-size:18px; font-weight:600; color:var(--fg); margin-bottom:8px;">Добро пожаловать в магазин!</div>' +
-        '<div style="margin-bottom:14px;">Откройте приложение через Telegram-бот, чтобы войти и купить.</div>' +
-        '<div class="muted" style="margin-top:18px;">Раздел «Магазин» доступен без входа — нажмите вкладку ниже.</div>';
-      screen.appendChild(note);
-      // Витрина всё равно подгружается (через /api/public/*).
-      // Оверрайдим api.* чтобы не падать на 401.
-      const proxy = window.shopApi;
-      const origMe = proxy.me.bind(proxy);
-      const origCart = proxy.cart.bind(proxy);
-      proxy.me = async () => ({ user: null });
-      proxy.cart = async () => ({ lines: [], total: "0.00" });
-      proxy.orders = async () => ({ orders: [] });
-      proxy.topups = async () => ({ topups: [] });
-      proxy.topup = async () => { throw new Error("войдите через бота"); };
-      proxy.cartAdd = async () => { throw new Error("войдите через бота"); };
-      proxy.cartQty = async () => { throw new Error("войдите через бота"); };
-      proxy.cartRemove = async () => { throw new Error("войдите через бота"); };
-      proxy.cartClear = async () => { throw new Error("войдите через бота"); };
-      proxy.checkout = async () => { throw new Error("войдите через бота"); };
-      proxy.payOrder = async () => { throw new Error("войдите через бота"); };
-      proxy.cancelOrder = async () => { throw new Error("войдите через бота"); };
-      void origMe; void origCart;
-
-      // Подменяем API URL категорий/товаров на публичный.
-          proxy.categories = async () => (await fetch("/api/public/categories")).json();
-          proxy.products = async (cid, kind) => {
-            const q = new URLSearchParams();
-            if (cid != null) q.set("categoryId", String(cid));
-            if (kind) q.set("kind", kind);
-            const u = "/api/public/products" + (q.toString() ? "?" + q.toString() : "");
-            return (await fetch(u)).json();
-          };
-          proxy.product = async (id) => (await fetch(`/api/public/product/${id}`)).json();
-          return;
+  async function main() {
+      bind();
+      if (!tg || !window.shopApi.initData()) {
+        state.noInitData = true;
+        const screen = $("#screen");
+        screen.innerHTML = "";
+        const note = document.createElement("div");
+        note.className = "empty";
+        note.innerHTML =
+          '<div style="font-size:48px; margin-bottom:12px;">🛍</div>' +
+          '<div style="font-size:18px; font-weight:600; color:var(--fg); margin-bottom:8px;">Добро пожаловать в магазин!</div>' +
+          '<div style="margin-bottom:14px;">Откройте приложение через Telegram-бот, чтобы войти и купить.</div>';
+        // Кнопка — глубокая ссылка на бота. Если бот известен — открываем.
+        const botName = (window.__BOT_USERNAME__ || "your_bot").replace(/^@/, "");
+        screen.appendChild(note);
+        const open = el("button", {
+          class: "btn",
+          text: "Открыть в Telegram-боте",
+          onclick: () => {
+            const url = "https://t.me/" + botName + "?startapp=shop";
+            window.open(url, "_blank");
+          },
+        });
+        screen.appendChild(open);
+        return;
+      }
+      await probeInitData();
+      if (state.noInitData) {
+        // no-op
+      } else if (state.guestMode || !state.initInfo || !state.initInfo.user) {
+        installGuestProxy();
+        setTab("shop");
+        handleDeepLink();
+      } else {
+        setTab("shop");
+        handleDeepLink();
+      }
     }
-    setTab("shop");
-    handleDeepLink();
+
+  function installGuestProxy() {
+    // Гость: витрина видна, но приватные эндпоинты кидают «войди через бота»
+    const proxy = window.shopApi;
+    proxy.me = async () => ({ user: null });
+    proxy.cart = async () => ({ lines: [], total: "0.00" });
+    proxy.orders = async () => ({ orders: [] });
+    proxy.topups = async () => ({ topups: [] });
+    proxy.topup = async () => { throw new Error("войдите через бота"); };
+    proxy.cartAdd = async () => { throw new Error("войдите через бота"); };
+    proxy.cartQty = async () => { throw new Error("войдите через бота"); };
+    proxy.cartRemove = async () => { throw new Error("войдите через бота"); };
+    proxy.cartClear = async () => { throw new Error("войдите через бота"); };
+    proxy.checkout = async () => { throw new Error("войдите через бота"); };
+    proxy.payOrder = async () => { throw new Error("войдите через бота"); };
+    proxy.cancelOrder = async () => { throw new Error("войдите через бота"); };
+    // Категории и товары — публичные
+    proxy.categories = async () => (await fetch("/api/public/categories")).json();
+    proxy.products = async (cid, kind) => {
+      const q = new URLSearchParams();
+      if (cid != null) q.set("categoryId", String(cid));
+      if (kind) q.set("kind", kind);
+      const u = "/api/public/products" + (q.toString() ? "?" + q.toString() : "");
+      return (await fetch(u)).json();
+    };
+    proxy.product = async (id) => (await fetch(`/api/public/product/${id}`)).json();
+  }
+
+  main();
 })();

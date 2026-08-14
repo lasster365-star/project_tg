@@ -26,6 +26,7 @@ from webapp.routers.api import (  # noqa: E402
     public as public_router,
     router as api_router,
 )
+from webapp.routers.debug import router as debug_router  # noqa: E402
 
 
 logging.basicConfig(
@@ -40,22 +41,19 @@ TWA_DIR = PROJECT_ROOT / "twa"
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Инициализация БД на старте, освобождение ресурсов на остановке."""
     log.info("Starting up: DB init…")
     await init_db()
     log.info("DB initialized")
     try:
         yield
     finally:
-        # Никаких особых ресурсов освобождать не нужно — соединения SQLAlchemy
-        # закроются вместе с event loop. Здесь — только лог.
         log.info("Shutting down.")
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Telegram Shop Mini App",
-        version="1.2.0",
+        version="1.3.0",
         docs_url="/api/docs",
         redoc_url=None,
         openapi_url="/api/openapi.json",
@@ -77,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(public_router)
     app.include_router(admin_router)
+    app.include_router(debug_router)
 
     @app.get("/manifest.webmanifest", include_in_schema=False)
     async def manifest() -> FileResponse:
