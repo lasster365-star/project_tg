@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Iterable, Optional
+from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +81,6 @@ class ShopService:
                 select(User).where(User.telegram_id == telegram_id)
             )
             if user is not None:
-                # обновим имя/username, если изменились
                 changed = False
                 if user.full_name != full_name:
                     user.full_name = full_name
@@ -195,9 +194,7 @@ class ShopService:
             await session.commit()
             return q
 
-    async def set_cart_qty(
-        self, telegram_id: int, product_id: int, qty: int
-    ) -> None:
+    async def set_cart_qty(self, telegram_id: int, product_id: int, qty: int) -> None:
         async with self.session_factory() as session:
             user = await session.scalar(
                 select(User).where(User.telegram_id == telegram_id)
@@ -288,7 +285,6 @@ class ShopService:
             return order
 
     async def pay_order(self, telegram_id: int, order_id: int) -> Order:
-        """Списание с баланса. Если реферер есть — начислим ему бонус."""
         async with self.session_factory() as session:
             user = await session.scalar(
                 select(User).where(User.telegram_id == telegram_id)
@@ -311,7 +307,6 @@ class ShopService:
             order.status = OrderStatus.paid
             order.paid_at = datetime.now(timezone.utc)
 
-            # бонус рефереру
             if user.referrer_id:
                 ref_user = await session.get(User, user.referrer_id)
                 if ref_user is not None:
@@ -356,6 +351,15 @@ class ShopService:
                 .options(selectinload(Order.items))
                 .order_by(Order.id.desc())
                 .limit(limit)
+            )
+            return list(result.scalars().all())
+
+    async def list_order_items(self, order_id: int) -> list[OrderItem]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(OrderItem)
+                .where(OrderItem.order_id == order_id)
+                .order_by(OrderItem.id)
             )
             return list(result.scalars().all())
 

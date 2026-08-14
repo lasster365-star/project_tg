@@ -4,12 +4,12 @@ REST-API для Mini App.
 """
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from shared.models import ProductKind, User
 from shared.services import (
     EmptyCart,
     InsufficientFunds,
@@ -17,8 +17,6 @@ from shared.services import (
     UserNotFound,
     shop_service,
 )
-from shared.tma_auth import TelegramUser
-from shared.utils import format_price
 from webapp.deps.auth import require_db_user, require_tg_user
 from webapp.deps.serializers import (
     cart_item_dto,
@@ -28,8 +26,7 @@ from webapp.deps.serializers import (
     topup_dto,
     user_dto,
 )
-from shared.models import ProductKind, User
-from shared.services import ShopService
+
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -54,16 +51,16 @@ async def me(
 
 @router.get("/categories")
 async def list_categories(
-    user: Annotated[User, Depends(require_db_user)],  # noqa: ARG001  (нужно для auth)
+    user: Annotated[User, Depends(require_db_user)],  # noqa: ARG001
     service: Annotated[ShopService, Depends(_service)],
     kind: str | None = Query(default=None),
 ) -> dict:
     if kind:
         try:
-            kinds = ProductKind(kind)
+            pkind = ProductKind(kind)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid kind") from exc
-        cats = await service.list_categories(kinds)
+        cats = await service.list_categories(pkind)
     else:
         cats = await service.list_categories()
     return {"categories": [category_dto(c) for c in cats]}
@@ -105,10 +102,8 @@ async def get_cart(
 ) -> dict:
     cart = await service.get_cart(user.telegram_id)
     return {
-        "lines": [
-            cart_item_dto(l.product, l.quantity) for l in cart.lines
-        ],
-        "total": format_price(cart.total),
+        "lines": [cart_item_dto(l.product, l.quantity) for l in cart.lines],
+        "total": cart.total,
     }
 
 
@@ -190,7 +185,8 @@ async def checkout(
         order = await service.create_order(user.telegram_id)
     except EmptyCart:
         raise HTTPException(status_code=400, detail="cart is empty")
-    return {"order": order_dto(order)}
+    items = await service.list_order_items(order.id)
+    return {"order": order_dto(order, items=items)}
 
 
 @router.post("/orders/{order_id}/pay")
@@ -205,7 +201,8 @@ async def pay_order(
         raise HTTPException(status_code=402, detail="insufficient funds")
     except (UserNotFound, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"order": order_dto(order)}
+    items = await service.list_order_items(order.id)
+    return {"order": order_dto(order, items=items)}
 
 
 @router.post("/orders/{order_id}/cancel")
@@ -218,7 +215,8 @@ async def cancel_order(
         order = await service.cancel_order(user.telegram_id, order_id)
     except (UserNotFound, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"order": order_dto(order)}
+    items = await service.list_order_items(order.id)
+    return {"order": order_dto(order, items=items)}
 
 
 @router.get("/orders")
@@ -227,7 +225,11 @@ async def list_orders(
     service: Annotated[ShopService, Depends(_service)],
 ) -> dict:
     orders = await service.list_orders(user.telegram_id)
-    return {"orders": [order_dto(o) for o in orders]}
+    out = []
+    for o in orders:
+        items = await service.list_order_items(o.id)
+        out.append(order_dto(o, items=items))
+    return {"orders": out}
 
 
 @router.get("/topups")

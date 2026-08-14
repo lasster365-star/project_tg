@@ -84,14 +84,15 @@ def order_item_dto(it: OrderItem) -> dict[str, Any]:
     }
 
 
-def order_dto(o: Order) -> dict[str, Any]:
+def order_dto(o: Order, items: list[OrderItem] | None = None) -> dict[str, Any]:
+    items_list = items if items is not None else list(o.items)
     return {
         "id": o.id,
         "status": o.status.value,
         "total": _money(o.total_amount),
         "createdAt": iso(o.created_at),
         "paidAt": iso(o.paid_at),
-        "items": [order_item_dto(i) for i in o.items],
+        "items": [order_item_dto(i) for i in items_list],
     }
 
 

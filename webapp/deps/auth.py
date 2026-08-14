@@ -1,10 +1,12 @@
-"""Аутентификация по initData для эндпоинтов /api/*."""
+"""
+Аутентификация по initData для эндпоинтов /api/*.
+initData приходит либо в `Authorization: tma <initData>`, либо в `X-Init-Data`.
+"""
 from __future__ import annotations
 
 from typing import Annotated, Optional
 
 from fastapi import Depends, Header, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import SQLAlchemyError
 
 from shared.config import config
@@ -13,42 +15,28 @@ from shared.services import ShopService, shop_service
 from shared.tma_auth import TelegramUser, extract_user, validate_init_data
 
 
-bearer = HTTPBearer(auto_error=False)
-
-
-def _parse_init_data(header_value: str | None) -> str:
-    if not header_value:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing initData",
-        )
-    if header_value.startswith("tma "):
-        return header_value[4:]
-    if header_value.startswith("Bearer "):
-        return header_value[7:]
-    return header_value
+def _extract_init_data(authorization: Optional[str], x_init_data: Optional[str]) -> str:
+    if x_init_data:
+        return x_init_data
+    if not authorization:
+        raise HTTPException(status_code=401, detail="missing initData")
+    parts = authorization.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() in {"tma", "bearer"}:
+        return parts[1]
+    if len(parts) == 1:
+        # клиент прислал голый initData без схемы
+        return parts[0]
+    raise HTTPException(status_code=401, detail="bad Authorization header")
 
 
 async def require_tg_user(
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer)],
+    authorization: Annotated[Optional[str], Header()] = None,
     x_init_data: Annotated[Optional[str], Header(alias="X-Init-Data")] = None,
 ) -> TelegramUser:
-    init_data = ""
-    if credentials and credentials.scheme:
-        init_data = credentials.credentials
-    elif x_init_data:
-        init_data = x_init_data
-    else:
-        # Совместимость: иногда боевые клиенты шлют просто строку в Authorization без схемы
-        if credentials is not None:
-            init_data = credentials.credentials
-
-    if not init_data:
-        raise HTTPException(status_code=401, detail="missing initData")
-
+    raw = _extract_init_data(authorization, x_init_data)
     try:
         parsed = validate_init_data(
-            init_data, config.bot_token, ttl_seconds=config.initdata_ttl_seconds
+            raw, config.bot_token, ttl_seconds=config.initdata_ttl_seconds
         )
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=f"invalid initData: {exc}") from exc
