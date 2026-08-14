@@ -1,5 +1,5 @@
 """
-Сервисный слой: пользователи, корзина, заказы, пополнение.
+Сервисный слой: пользователи, корзина, заказы, пополнение, CRUD товаров.
 Используется и ботом, и FastAPI.
 """
 from __future__ import annotations
@@ -127,6 +127,13 @@ class ShopService:
                 or 0
             )
 
+    async def list_all_users(self, limit: int = 50) -> list[User]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(User).order_by(User.id.desc()).limit(limit)
+            )
+            return list(result.scalars().all())
+
     # -------------------- Catalog --------------------
     async def list_categories(self, kind: Optional[ProductKind] = None) -> list[Category]:
         async with self.session_factory() as session:
@@ -141,9 +148,12 @@ class ShopService:
         category_id: Optional[int] = None,
         kind: Optional[ProductKind] = None,
         limit: int = 100,
+        include_inactive: bool = False,
     ) -> list[Product]:
         async with self.session_factory() as session:
-            stmt = select(Product).where(Product.is_active.is_(True))
+            stmt = select(Product)
+            if not include_inactive:
+                stmt = stmt.where(Product.is_active.is_(True))
             if category_id is not None:
                 stmt = stmt.where(Product.category_id == category_id)
             if kind is not None:
@@ -164,9 +174,69 @@ class ShopService:
                 select(Category).where(Category.id == category_id)
             )
 
+    # -------------------- Admin: products CRUD --------------------
+    async def create_product(self, product: Product) -> int:
+        async with self.session_factory() as session:
+            session.add(product)
+            await session.commit()
+            await session.refresh(product)
+            return product.id
+
+    async def update_product(
+        self,
+        product_id: int,
+        *,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        price: Optional[float] = None,
+        stock: Optional[int] = None,
+        is_active: Optional[bool] = None,
+    ) -> Product:
+        async with self.session_factory() as session:
+            p = await session.scalar(
+                select(Product).where(Product.id == product_id)
+            )
+            if p is None:
+                raise ValueError(f"product {product_id} not found")
+            if title is not None:
+                p.title = title
+            if description is not None:
+                p.description = description
+            if price is not None:
+                p.price = Decimal(str(price))
+            if stock is not None:
+                p.stock = stock
+            if is_active is not None:
+                p.is_active = is_active
+            await session.commit()
+            await session.refresh(p)
+            return p
+
+    async def deactivate_product(self, product_id: int) -> bool:
+        async with self.session_factory() as session:
+            p = await session.scalar(
+                select(Product).where(Product.id == product_id)
+            )
+            if p is None:
+                return False
+            p.is_active = False
+            await session.commit()
+            return True
+
+    async def create_category(
+        self, slug: str, title: str, kind: ProductKind, description: str = "", sort: int = 0
+    ) -> int:
+        async with self.session_factory() as session:
+            cat = Category(
+                slug=slug, title=title, kind=kind, description=description, sort=sort
+            )
+            session.add(cat)
+            await session.commit()
+            await session.refresh(cat)
+            return cat.id
+
     # -------------------- Cart --------------------
     async def add_to_cart(self, telegram_id: int, product_id: int, qty: int = 1) -> int:
-        """Возвращает новое количество в корзине."""
         async with self.session_factory() as session:
             user = await session.scalar(
                 select(User).where(User.telegram_id == telegram_id)

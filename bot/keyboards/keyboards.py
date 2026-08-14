@@ -13,20 +13,21 @@ from aiogram.types import (
 )
 
 
-def main_menu_keyboard(twa_url: str) -> ReplyKeyboardMarkup:
+def main_menu_keyboard(twa_url: str, is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Главное меню бота (replay keyboard). Сверху большая кнопка WebApp."""
     webapp = WebAppInfo(url=twa_url)
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🛍 Открыть магазин", web_app=webapp)],
-            [
-                KeyboardButton(text="👤 Личный кабинет"),
-                KeyboardButton(text="🛒 Корзина"),
-            ],
-            [
-                KeyboardButton(text="💬 Поддержка"),
-            ],
+    rows = [
+        [KeyboardButton(text="🛍 Открыть магазин", web_app=webapp)],
+        [
+            KeyboardButton(text="👤 Личный кабинет"),
+            KeyboardButton(text="🛒 Корзина"),
         ],
+        [KeyboardButton(text="💬 Поддержка")],
+    ]
+    if is_admin:
+        rows.append([KeyboardButton(text="🛠 Админка")])
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
         resize_keyboard=True,
         input_field_placeholder="Магазин цифровых товаров",
     )

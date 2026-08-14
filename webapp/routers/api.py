@@ -1,15 +1,20 @@
 """
 REST-API для Mini App.
-Все эндпоинты /api/* требуют initData.
+
+`/api/public/*` — гостевой публичный доступ (без initData).
+`/api/*` — под /api/cart, /api/orders, /api/me — требуется initData (TMA).
+`/api/admin/*` — заголовок X-Admin-Token == ADMIN_TOKEN env.
 """
 from __future__ import annotations
 
-from typing import Annotated
+import secrets
+from decimal import Decimal
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from shared.models import ProductKind, User
+from shared.models import OrderItem, ProductKind, User
 from shared.services import (
     EmptyCart,
     InsufficientFunds,
@@ -29,46 +34,44 @@ from webapp.deps.serializers import (
 
 
 router = APIRouter(prefix="/api", tags=["api"])
+public = APIRouter(prefix="/api/public", tags=["public"])
+admin = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 def _service() -> ShopService:
     return shop_service
 
 
-@router.get("/health")
-async def health() -> dict[str, str]:
+def _admin_token_checker(
+    x_admin_token: Annotated[Optional[str], Header(alias="X-Admin-Token")] = None,
+):
+    import os
+
+    expected = os.getenv("ADMIN_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="ADMIN_TOKEN not configured")
+    if not x_admin_token or not secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="bad admin token")
+    return True
+
+
+# ---------------- Public (для витрины и предпросмотра) ----------------
+
+@public.get("/health")
+async def health_public() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/me")
-async def me(
-    user: Annotated[User, Depends(require_db_user)],
+@public.get("/categories")
+async def public_categories(
     service: Annotated[ShopService, Depends(_service)],
 ) -> dict:
-    refs = await service.count_referrals(user.id)
-    return {"user": user_dto(user, refs)}
-
-
-@router.get("/categories")
-async def list_categories(
-    user: Annotated[User, Depends(require_db_user)],  # noqa: ARG001
-    service: Annotated[ShopService, Depends(_service)],
-    kind: str | None = Query(default=None),
-) -> dict:
-    if kind:
-        try:
-            pkind = ProductKind(kind)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="invalid kind") from exc
-        cats = await service.list_categories(pkind)
-    else:
-        cats = await service.list_categories()
+    cats = await service.list_categories()
     return {"categories": [category_dto(c) for c in cats]}
 
 
-@router.get("/products")
-async def list_products(
-    user: Annotated[User, Depends(require_db_user)],  # noqa: ARG001
+@public.get("/products")
+async def public_products(
     service: Annotated[ShopService, Depends(_service)],
     categoryId: int | None = Query(default=None),
     kind: str | None = Query(default=None),
@@ -83,16 +86,20 @@ async def list_products(
     return {"products": [product_dto(p) for p in products]}
 
 
-@router.get("/product/{product_id}")
-async def get_product(
-    product_id: int,
-    user: Annotated[User, Depends(require_db_user)],  # noqa: ARG001
+# ---------------- Authorized (нужен initData) ----------------
+
+@router.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.get("/me")
+async def me(
+    user: Annotated[User, Depends(require_db_user)],
     service: Annotated[ShopService, Depends(_service)],
 ) -> dict:
-    p = await service.get_product(product_id)
-    if p is None:
-        raise HTTPException(status_code=404, detail="not found")
-    return {"product": product_dto(p)}
+    refs = await service.count_referrals(user.id)
+    return {"user": user_dto(user, refs)}
 
 
 @router.get("/cart")
@@ -239,3 +246,114 @@ async def list_topups(
 ) -> dict:
     rows = await service.list_topups(user.telegram_id)
     return {"topups": [topup_dto(t) for t in rows]}
+
+
+# ---------------- Admin (X-Admin-Token) ----------------
+
+class AdminProductCreate(BaseModel):
+    categoryId: int
+    title: str
+    description: str = ""
+    price: float
+    kind: str
+    rentalDays: int | None = None
+    stock: int = -1
+    rating: float = 4.8
+    reviewsCount: int = 0
+
+
+class AdminProductUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    price: float | None = None
+    stock: int | None = None
+    isActive: bool | None = None
+
+
+class AdminTopUp(BaseModel):
+    telegramId: int
+    amount: float
+    method: str = "admin"
+
+
+@admin.get("/products")
+async def admin_list_products(
+    _: Annotated[bool, Depends(_admin_token_checker)],
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    products = await service.list_products()
+    return {"products": [product_dto(p) for p in products]}
+
+
+@admin.post("/products")
+async def admin_create_product(
+    payload: AdminProductCreate,
+    _: Annotated[bool, Depends(_admin_token_checker)],
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    try:
+        kind = ProductKind(payload.kind)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid kind") from exc
+    from shared.models import Product
+
+    p = Product(
+        category_id=payload.categoryId,
+        title=payload.title,
+        description=payload.description,
+        price=Decimal(str(payload.price)),
+        kind=kind,
+        rental_days=payload.rentalDays,
+        stock=payload.stock,
+        rating=Decimal(str(payload.rating)),
+        reviews_count=payload.reviewsCount,
+        is_active=True,
+    )
+    pid = await service.create_product(p)
+    return {"id": pid, "product": product_dto(p)}
+
+
+@admin.patch("/products/{product_id}")
+async def admin_update_product(
+    product_id: int,
+    payload: AdminProductUpdate,
+    _: Annotated[bool, Depends(_admin_token_checker)],
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    try:
+        p = await service.update_product(
+            product_id,
+            title=payload.title,
+            description=payload.description,
+            price=payload.price,
+            stock=payload.stock,
+            is_active=payload.isActive,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"product": product_dto(p)}
+
+
+@admin.delete("/products/{product_id}")
+async def admin_delete_product(
+    product_id: int,
+    _: Annotated[bool, Depends(_admin_token_checker)],
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    ok = await service.deactivate_product(product_id)
+    return {"ok": ok}
+
+
+@admin.post("/users/topup")
+async def admin_topup_user(
+    payload: AdminTopUp,
+    _: Annotated[bool, Depends(_admin_token_checker)],
+    service: Annotated[ShopService, Depends(_service)],
+) -> dict:
+    try:
+        user = await service.topup_balance(
+            payload.telegramId, payload.amount, method=payload.method
+        )
+    except (UserNotFound, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"user": user_dto(user)}

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from aiogram import Router
 
-from bot.handlers import cart, profile, shop, start, support
+from bot.handlers import admin, cart, profile, shop, start, support
 
 
 def setup_routers() -> Router:
@@ -13,4 +13,5 @@ def setup_routers() -> Router:
     root.include_router(cart.router)
     root.include_router(profile.router)
     root.include_router(support.router)
+    root.include_router(admin.router)
     return root

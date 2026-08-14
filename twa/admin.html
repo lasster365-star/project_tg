@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Админка · TG Shop</title>
+  <link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <h1>🛠 Админка</h1>
+      <span id="who" class="muted"></span>
+    </header>
+
+    <main id="screen">
+      <div id="loginBox">
+        <p>Введите <b>ADMIN_TOKEN</b> для доступа к админ-эндпоинтам.</p>
+        <input id="tok" type="password" placeholder="X-Admin-Token" autocomplete="off" />
+        <button id="loginBtn" class="btn">Войти</button>
+        <p class="muted">Токен хранится в localStorage этого браузера.</p>
+      </div>
+
+      <div id="panel" class="hidden">
+        <section>
+          <h2>Товары</h2>
+          <button class="btn" id="refreshProducts">↻ Обновить список</button>
+          <div id="products" class="list"></div>
+        </section>
+
+        <section>
+          <h2>➕ Новый товар</h2>
+          <form id="newProduct" class="form">
+            <label>Категория ID <input name="categoryId" type="number" value="1" required /></label>
+            <label>Название <input name="title" required maxlength="200" /></label>
+            <label>Описание <textarea name="description" rows="3"></textarea></label>
+            <label>Цена ₽ <input name="price" type="number" step="0.01" required /></label>
+            <label>Тип
+              <select name="kind">
+                <option value="subscription">subscription</option>
+                <option value="account">account</option>
+                <option value="key">key</option>
+                <option value="rental">rental</option>
+              </select>
+            </label>
+            <label>Срок проката (дней, только для rental) <input name="rentalDays" type="number" /></label>
+            <label>Запас (<code>-1</code> = без лимита) <input name="stock" type="number" value="-1" /></label>
+            <button class="btn" type="submit">Создать</button>
+            <div id="newProductOut" class="muted"></div>
+          </form>
+        </section>
+
+        <section>
+          <h2>💰 Пополнить баланс пользователю</h2>
+          <form id="topup" class="form">
+            <label>Telegram ID <input name="telegramId" type="number" required /></label>
+            <label>Сумма ₽ <input name="amount" type="number" step="0.01" required /></label>
+            <button class="btn" type="submit">Зачислить</button>
+            <div id="topupOut" class="muted"></div>
+          </form>
+        </section>
+
+        <section>
+          <h2>👤 Пользователи</h2>
+          <div id="users" class="list"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="js/admin.js"></script>
+</body>
+</html>

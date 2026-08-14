@@ -11,24 +11,27 @@ import sys
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.requests import Request
+from fastapi.staticfiles import StaticFiles
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from shared.config import config  # noqa: E402
 from shared.db import init_db  # noqa: E402
-from webapp.routers.api import router as api_router  # noqa: E402
+from webapp.routers.api import (  # noqa: E402
+    admin as admin_router,
+    public as public_router,
+    router as api_router,
+)
 
 
 logging.basicConfig(
     level=logging.INFO if not config.debug else logging.DEBUG,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-log = logging.getLogger("site")
+log = logging.getLogger("webapp")
 
 
 TWA_DIR = PROJECT_ROOT / "twa"
@@ -37,7 +40,7 @@ TWA_DIR = PROJECT_ROOT / "twa"
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Telegram Shop Mini App",
-        version="1.0.0",
+        version="1.1.0",
         docs_url="/api/docs",
         redoc_url=None,
         openapi_url="/api/openapi.json",
@@ -48,15 +51,21 @@ def create_app() -> FastAPI:
         await init_db()
         log.info("DB initialized")
 
-    # API
+    @app.exception_handler(Exception)
+    async def _json_error(request: Request, exc: Exception):
+        if isinstance(exc, HTTPException):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+        return JSONResponse(
+            status_code=500, content={"error": "internal", "detail": str(exc)}
+        )
+
     app.include_router(api_router)
-
-    # Mini App статика — корень /, StaticFiles ниже не пересекается
-    app.mount("/", StaticFiles(directory=str(TWA_DIR), html=True), name="twa")
-
-    @app.get("/api/health", include_in_schema=False)
-    async def health() -> JSONResponse:
-        return JSONResponse({"status": "ok"})
+    app.include_router(public_router)
+    app.include_router(admin_router)
 
     @app.get("/manifest.webmanifest", include_in_schema=False)
     async def manifest() -> FileResponse:
@@ -64,15 +73,18 @@ def create_app() -> FastAPI:
 
     @app.get("/telegram-web-app.js", include_in_schema=False)
     async def telegram_js() -> FileResponse:
-        # Telegram автоматически подгружает этот скрипт в Mini App.
-        return FileResponse(TWA_DIR / "telegram-web-app.js", media_type="application/javascript")
-
-    @app.exception_handler(Exception)
-    async def _json_error(request: Request, exc: Exception):
-        # Чтобы клиент получал JSON, а не HTML 500
-        return JSONResponse(
-            status_code=500, content={"error": "internal", "detail": str(exc)}
+        return FileResponse(
+            TWA_DIR / "telegram-web-app.js",
+            media_type="application/javascript",
         )
+
+    @app.get("/admin", include_in_schema=False)
+    async def admin_page() -> FileResponse:
+        return FileResponse(TWA_DIR / "admin.html")
+
+    # Mini App статика — корень /, StaticFiles ниже не пересекается
+    app.mount("/", StaticFiles(directory=str(TWA_DIR), html=True), name="twa")
+
     return app
 
 

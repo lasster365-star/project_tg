@@ -37,6 +37,14 @@ class Config:
 
     support_chat_id: str = os.getenv("SUPPORT_CHAT", "@lasster_support")
 
+    # Пароль админки (X-Admin-Token). Если пусто — админ-эндпоинты отключены.
+    admin_token: str = os.getenv("ADMIN_TOKEN", "")
+
+    # Telegram id, которым разрешён вход в админку бота
+    admin_ids: tuple[int, ...] = tuple(
+        int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()
+    )
+
     # Режим отладки
     debug: bool = _get_bool("DEBUG", False)
 

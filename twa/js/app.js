@@ -460,12 +460,50 @@
   }
 
   // Стартовая загрузка
-  bind();
-  // Если initData пустое (например браузер) — покажем предупреждение
-  if (!window.shopApi.initData()) {
-    renderText("Откройте это приложение через бота в Telegram: иначе авторизация невозможна.");
-    return;
-  }
-  setTab("shop");
-  handleDeepLink();
+    bind();
+    // Если initData пустое (например браузер) — покажем дружелюбное сообщение
+    // вместо «сессия истекла».
+    if (!tg || !window.shopApi.initData()) {
+      const screen = $("#screen");
+      screen.innerHTML = "";
+      const note = document.createElement("div");
+      note.className = "empty";
+      note.innerHTML =
+        '<div style="font-size:48px; margin-bottom:12px;">🛍</div>' +
+        '<div style="font-size:18px; font-weight:600; color:var(--fg); margin-bottom:8px;">Добро пожаловать в магазин!</div>' +
+        '<div style="margin-bottom:14px;">Откройте приложение через Telegram-бот, чтобы войти и купить.</div>' +
+        '<div class="muted" style="margin-top:18px;">Раздел «Магазин» доступен без входа — нажмите вкладку ниже.</div>';
+      screen.appendChild(note);
+      // Витрина всё равно подгружается (через /api/public/*).
+      // Оверрайдим api.* чтобы не падать на 401.
+      const proxy = window.shopApi;
+      const origMe = proxy.me.bind(proxy);
+      const origCart = proxy.cart.bind(proxy);
+      proxy.me = async () => ({ user: null });
+      proxy.cart = async () => ({ lines: [], total: "0.00" });
+      proxy.orders = async () => ({ orders: [] });
+      proxy.topups = async () => ({ topups: [] });
+      proxy.topup = async () => { throw new Error("войдите через бота"); };
+      proxy.cartAdd = async () => { throw new Error("войдите через бота"); };
+      proxy.cartQty = async () => { throw new Error("войдите через бота"); };
+      proxy.cartRemove = async () => { throw new Error("войдите через бота"); };
+      proxy.cartClear = async () => { throw new Error("войдите через бота"); };
+      proxy.checkout = async () => { throw new Error("войдите через бота"); };
+      proxy.payOrder = async () => { throw new Error("войдите через бота"); };
+      proxy.cancelOrder = async () => { throw new Error("войдите через бота"); };
+      void origMe; void origCart;
+
+      // Подменяем API URL категорий/товаров на публичный.
+      proxy.categories = async () => (await fetch("/api/public/categories")).json();
+      proxy.products = async (cid, kind) => {
+        const q = new URLSearchParams();
+        if (cid != null) q.set("categoryId", String(cid));
+        if (kind) q.set("kind", kind);
+        const u = "/api/public/products" + (q.toString() ? "?" + q.toString() : "");
+        return (await fetch(u)).json();
+      };
+      return;
+    }
+    setTab("shop");
+    handleDeepLink();
 })();

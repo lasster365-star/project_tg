@@ -35,6 +35,7 @@ async def cmd_start(message: Message, command: CommandObject, shop_service, stat
         referrer_code=ref_code,
     )
 
+    is_admin = message.from_user.id in config.admin_ids
     text = (
         "👋 Привет, <b>{name}</b>!\n\n"
         "Я — бот-магазин цифровых товаров: подписки, ключи игр, аккаунты и прокат.\n"
@@ -44,11 +45,10 @@ async def cmd_start(message: Message, command: CommandObject, shop_service, stat
     await send_visual(
         message,
         caption=text,
-        keyboard=None,                # reply-кнопка уйдёт отдельно
+        keyboard=None,
         image="menu_main.png",
-        edit=False,
     )
     await message.answer(
-        "Главное меню 👇",
-        reply_markup=main_menu_keyboard(config.twa_url),
+        "Главное меню 👇" + (" · вы админ" if is_admin else ""),
+        reply_markup=main_menu_keyboard(config.twa_url, is_admin=is_admin),
     )
